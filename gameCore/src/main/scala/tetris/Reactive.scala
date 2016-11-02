@@ -47,29 +47,11 @@ object Var{
   def apply[T](expr: => T): Var[T] = new Var(expr)
 }
 
-class StackableVariable[T](init: T){
-  private var values: List[T] = List(init)
-  def value: T = values.head
-  def withValue[R](newValue: T)(op: => R): R ={
-    values = newValue :: values
-    try op finally values = values.tail
-  }
-}
-
-object React extends App {
-  import scala.concurrent._
-  import scala.concurrent.ExecutionContext.Implicits.global
-
-  val sumF = Future {
-    (1L to 1000000L).sum
-    (1L to 1000000L).sum
-    (1L to 1000000L).sum
-    (1L to 1000000L).sum
-  }
-  sumF onComplete { case (a: Try[Long]) => println("done")}
-  sumF onSuccess { case (a: Long) => println("done")}
-
-  (1L to 1000000L).sum
-  (1L to 1000000L).sum
-  println("hello")
-}
+//class StackableVariable[T](init: T){
+//  private var values: List[T] = List(init)
+//  def value: T = values.head
+//  def withValue[R](newValue: T)(op: => R): R ={
+//    values = newValue :: values
+//    try op finally values = values.tail
+//  }
+//}

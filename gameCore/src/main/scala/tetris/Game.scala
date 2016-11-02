@@ -3,8 +3,7 @@ package tetris
 import scala.language.postfixOps
 import scala.concurrent._
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.util.{Failure, Success, Try}
-
+import scala.concurrent.duration._
 
 /**
   * Created by one on 25.10.2016.
@@ -28,7 +27,7 @@ case class Cell(x: Int, y: Int) {
   }
 
   def isInBorders(board: Board): Boolean =
-    x >= 0 /*&& x <= board.height - 1*/ && y >= 0 && y <= board.width - 1
+    x >= 0 && x <= board.width- 1 && y >= 0 /*&& y <= board.height- 1*/
 
   def makeMove(move: Action, board: Board): Cell =
     if (isMoveAllowed(move, board)) Cell(x + move.spanX, y + move.spanY)
@@ -75,6 +74,10 @@ case class Block(cells: List[Cell], blockType: BlockType) {
     _.isMoveAllowed(move, board)
   }
 
+  def lowest: Cell = cells minBy { _.y }
+
+  def highest: Cell = cells minBy { _.y }
+
   def cellsByCoor(x: Int, y: Int): List[Cell] = cells filter { cell => cell.x == x && cell.y == y }
 }
 
@@ -82,10 +85,10 @@ object Block {
   def apply(x: Int, y: Int, blockType: BlockType): Block = blockType match {
     case I => Block(List(Cell(x - 1, y), Cell(x - 2, y), Cell(x, y), Cell(x + 1, y)), blockType)
     case J => Block(List(Cell(x, y), Cell(x - 1, y), Cell(x + 1, y), Cell(x + 1, y - 1)), blockType)
-    case L => Block(List(Cell(x, y - 1), Cell(x - 1, y - 1), Cell(x + 1, y - 1), Cell(x + 1, y)), blockType)
-    case O => Block(List(Cell(x - 1, y - 1), Cell(x, y - 1), Cell(x - 1, y), Cell(x, y)), blockType)
+    case L => Block(List(Cell(x, y - 1), Cell(x - 1, y - 1), Cell(x + 1, y - 1), Cell(x + 1, y)), blockType) //ops
+    case O => Block(List(Cell(x - 1, y - 1), Cell(x, y - 1), Cell(x - 1, y), Cell(x, y)), blockType) //ops
     case S => Block(List(Cell(x, y), Cell(x - 1, y - 1), Cell(x, y - 1), Cell(x + 1, y)), blockType)
-    case T => Block(List(Cell(x, y - 1), Cell(x - 1, y - 1), Cell(x + 1, y - 1), Cell(x, y)), blockType)
+    case T => Block(List(Cell(x, y), Cell(x - 1, y), Cell(x + 1, y), Cell(x, y - 1)), blockType)
     case Z => Block(List(Cell(x, y), Cell(x - 1, y), Cell(x, y - 1), Cell(x + 1, y - 1)), blockType)
   }
 }
@@ -93,12 +96,19 @@ object Block {
 case class Board(cells: List[Cell], height: Int, width: Int) {
   def cellsByCoor(x: Int, y: Int): List[Cell] = cells filter { cell => cell.x == x && cell.y == y }
 
+  def neighbours(cell: Cell): List[Cell] = cells filter {
+    c =>
+      ((c.x + 1 == cell.x || c.x - 1 == cell.x) && c.y == cell.y) ||
+        (c.y + 1 == cell.y || c.y - 1 == cell.y) && c.x == cell.x
+  }
+
   private def line(index: Int): List[Cell] = cells filter {
     _.y == index
   }
 
-  def defeat: Boolean = cells exists {
-    _.y >= height - 1
+  def highest: Cell = cells match {
+    case head::tail => cells maxBy( _.y )
+    case Nil => Cell(0, 0)
   }
 
   def clear = Board(
@@ -143,10 +153,10 @@ object Play extends Status
 
 object Stop extends Status
 
-case class GameState(block: Block, board: Board, status: Status = Play){
+case class GameState(block: Block, board: Board, status: Status){
   private def randomBlock = {
     val x = board.width / 2
-    val y = board.height + 2
+    val y = board.height + 1
     scala.util.Random.nextInt(7000) % 7 match {
       case 0 => Block(x, y, I)
       case 1 => Block(x, y, J)
@@ -158,15 +168,24 @@ case class GameState(block: Block, board: Board, status: Status = Play){
     }
   }
 
+  // надо поправить (клетки должны быть соседними)
+  def isDefeated: Boolean = {
+    val boardHighestCell = board.highest
+    val blockHighestCell = block.highest
+    val blockLowestCell = block.lowest
+    val neighbours = block.cells.flatMap(board.neighbours).toSet
+    boardHighestCell.y + 1 == blockLowestCell.y && blockHighestCell.y >= board.height - 1 && (neighbours exists { _.y == boardHighestCell.y })
+  }
+
   def performAction(action: Action): GameState = action match {
     case Down(_, _) | Right(_, _) | Left(_, _) =>
-      if (block.isMoveAllowed(action, board)) GameState(block.makeMove(action, board), board)
-      else if (block.isMoveAllowed(Down(), board)) GameState(block, board)
-      else if (board.defeat) GameState(block, board, Defeat)
-      else GameState(randomBlock, (board consume block clear).pushDown)
+      if (isDefeated) GameState(block, board, Defeat)
+      else if (block.isMoveAllowed(action, board)) GameState(block.makeMove(action, board), board, status)
+      else if (block.isMoveAllowed(Down(), board)) GameState(block, board, status)
+      else GameState(randomBlock, board.consume(block).clear.pushDown, status)
     case Rotation() =>
-      if (block.isRotationAllowed(action, board)) GameState(block.makeRotation(action, board), board)
-      else GameState(block, board)
+      if (block.isRotationAllowed(action, board)) GameState(block.makeRotation(action, board), board, status)
+      else GameState(block, board, status)
     case _ => this
   }
 
@@ -185,8 +204,8 @@ case class GameState(block: Block, board: Board, status: Status = Play){
 }
 
 sealed abstract class PlayerType
-case class SystemPlayer() extends PlayerType
-case class HumanPlayer() extends PlayerType
+object SystemPlayer extends PlayerType
+object HumanPlayer extends PlayerType
 
 abstract class Player(val name: String, val playerType: PlayerType) {
   def actionCatcher: Action
@@ -197,10 +216,10 @@ abstract class Player(val name: String, val playerType: PlayerType) {
 
 object Player {
   def apply(name: String, playerType: PlayerType): Player = playerType match {
-    case SystemPlayer() => new Player("system", playerType){
+    case SystemPlayer => new Player("system", playerType){
       override def actionCatcher: Action = Down()
     }
-    case HumanPlayer() => new Player(name, playerType){
+    case HumanPlayer => new Player(name, playerType){
       override def actionCatcher: Action = scala.io.StdIn.readLine() match {
         case "a" => Left()
         case "s" => Down()
@@ -211,45 +230,39 @@ object Player {
   }
 }
 
-class Game(val startingGameState: GameState, val playerA: Player){
+class Game(val startingGameState: GameState, val one: Player){
 
   var gameState: GameState = startingGameState
-  val systemPlayer: Player = Player("system", SystemPlayer())
-
-  var stop : Boolean = false
+  val systemPlayer: Player = Player("system", SystemPlayer)
 
   def updateGameState(player: Player, action: Action): Unit = this.synchronized {
-      gameState = player.play(gameState, action)
-    }
+    gameState = player.play(gameState, action)
+  }
 
-  def play(player: Player) = Future {
-    while (gameState.status != Defeat || gameState.status != Stop) {
-      println(gameState) // not needed
-      val action = player.actionCatcher
-      updateGameState(player, action)
-      println(gameState)
+  def ifFunGetElseNull(fun: => Boolean, get: => Any): Option[Any] = Option {
+    if (fun) get
+    else null
+  }
+
+  def play(player: Player): Future[Status] = Future {
+    while (gameState.status == Play) {
+      val action = ifFunGetElseNull(gameState.status == Play, player.actionCatcher).asInstanceOf[Option[Action]]
+      val playable = ifFunGetElseNull(gameState.status == Play, true).asInstanceOf[Option[Boolean]]
+      for {p <- playable
+           a <- action} updateGameState(player, a)
       player.playerType match {
-        case SystemPlayer() => Thread.sleep(1000)
+        case SystemPlayer => Thread sleep 1000
         case _ =>
       }
+      println(gameState)
     }
     gameState.status
-  } onComplete { (ts: Try[Status]) =>
-    ts match {
-      case Success(Defeat | Stop) => stop = true
-      case Failure(_) => println("something is wrong")
-      case _ => println("something is wrong______________")
-    }
   }
 
   def start(): Unit = {
-    val playingA = play(playerA)
-
-    //val playingS = play(systemPlayer)
-
-    while (!stop){
-    }
-    println("stop")
-
+    val first: Future[Status] = play(one)
+    val second: Future[Status] = play(systemPlayer)
+    val confirmation: Status = Await.result(first, Duration.Inf)
+    println(confirmation)
   }
 }
